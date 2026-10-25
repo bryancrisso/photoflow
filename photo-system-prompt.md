@@ -65,9 +65,11 @@ Am I going to write a whole python script to upload? Maybe I will just use the r
 
 Could I hold RAW/Edit/Export info in the metadata as well and use that to filter in digiKam?
 
-## 5. Plan draft
+## 5 Plan draft
 
 ### 5.1 Filing system
+
+#### 5.1.1 Overview
 
 Photos are sorted into 'albums'. A photo has a fixed base album where it is stored, and then there should be support for 'logical albums' (essentially classification/tags) for recollecting photos in a different way.
 For physical storage, use chronological, event-based folder structure. Flexible naming using Variable-Precision ISO Prefixes to ensure alphabetical sorting remains chronological while allowing fuzzy dates.
@@ -107,15 +109,138 @@ and `pyexiftool`, while also mapping useful outputs into standard fields that di
 
 Logical album support should be done with Google Drive shortcuts to prevent file duplication, and allows for easy viewing of logical albums from Dolphin or GDrive. There should be an auotmated script to copy over a particular digiKam logical collection tag to a logical folder of shortcuts in GDrive.
 
-_note_
-I know the album has some fields on gear and generic notes, but it would also be nice for this to be photo specific
-(especially if the album is shot on many cameras and over a long time). I know digital cameras will record gear in the EXIF data but this
-isn't true for film scans. I don't quite know exactly where to have each type of metadata (in the EXIF or in the sidecar XMP),
-and what exactly to include in this metadata and how to interact with it (can I do this directly from digiKam, and add
-notes/tags in bulk, etc.?) Help me plan this bit in more detail.
-Additionally, for the album yaml files, will this interact with digiKam? Or should I use a different format. Would be nice
-to get a full seamless system with digiKam.
-Also how does metadata for sub-albums look?
+#### 5.1.2 Metadata
+
+We keep mutable metadata in sidecar files to limit reuploads of large image files when updating metadata.
+
+| FileType               | Metadata Location                                                 | Notes                                                                                                                                                         |
+| ---------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Digital RAWs (`.CR3`)  | Read-only EXIF (in file) + write mutable metadata to .xmp sidecar | Camera already embeds EXIF data into the image. Use the xmp sidecar to prevent reuploading the entire RAW file when updating medata.                          |
+| Film Scans (`.jpg`)    | 1-Time EXIF Stamp on Import + .xmp sidecar for ongoing metadata   | Lab scans arrive with blank/scanner-only EXIF data. We stamp EXIF data on import to recognise the original camera, then continue to use the sidecar as above. |
+| Final Exports (`.jpg`) | Baked inside the JPEG file on export from ART.                    | ART bakes EXIF and XMP tags into the JPEG header so it is self-contained for sharing.                                                                         |
+
+The metadata arrives in 3 layers:
+
+1. Standard EXIF fields (built for digital cameras)
+   - `EXIF:Make` & `EXIF:Model`
+   - `EXIF:LensModel`
+   - `EXIF:ISO`
+   - `EXIF:DateTimeOriginal`, in the format YYYY:MM:DD HH:MM:SS. For month-only timestamps, increment each frame's timestamp by 1 minute during import so frames 1 to 36 always stay in chronological order!
+2. Standard XMP hierarchical tags
+   - `Film/Roll/R045`
+   - `Stage/Scan`, `Stage/Export`, and `Stage/RAW`
+3. Custom private XMP Namespace (`XMP-photoflow:*`) for scripts and AI state
+   - Allows Python scripts to read/write structured data cleanly.
+
+We can interact with metadata via digiKam.
+
+- Configure non-destructive sidecars
+- Bulk notes, ratings and hierarchical tags
+- Bulk Date/Time shifting for film rolls
+- Using user shell scripts to batch queue metadata management
+- Can also view custom XMP tags
+
+Album.yaml doesn't interact with digiKam directly, but we use it to access album metadata from elsewhere, and we can use a python script to bridge `album.yaml` to digiKam's Albums SQLite database.
+
+Sub-album metadata should use Parent-Child YAML Inheritance to never duplicate trip-wide info. A child leaf folder holds only overrides and specifics for that branch.
+To stamp with inheritance,
+
+1. Start from the photo's folder, and look for the YAML.
+2. Check for a parent album. If it exists:
+   - Single values (`title`, `date`, `notes`) are overriden.
+   - Hierarchical tags and locations are combined.
+   - Film rolls should be defined at the album which they were shot across.
+
+#### 5.1.3 Metadata specification
+
+##### 5.1.3.A Photo-level schema
+
+| Root Tag Tree | Example Hierarchical Paths                                                                                             | Population Method                                           | Purpose                                                    |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------- |
+| Stage/        | RAW, Scan, Edit, Export                                                                                                | Auto, by subfolder name, with colour label on import/export | Hide unedited RAWs or isolate film scans vs finished JPGs. |
+| Medium/       | Digital, Film/35mm, Film/120                                                                                           | Auto, digital if .cr3, otherwise stamped from album.yaml    | Instantly filter entire library by medium                  |
+| Film/         | Roll/R045, Camera/Minolta X-700, Stock/Kodak/Gold 200, Type/Colour Negative, Process/Pushed +1, Lab/21 Studio Photolab | Auto, stamped from album metadata                           | Gives film scans the rich metadata as digital              |
+| Location/     | Europe/UK/Lake District                                                                                                | Auto from album metadata                                    | Hierarchical location narrowing                            |
+| Collection/   | Themes/Minimalism                                                                                                      | Manual                                                      | Logical album system                                       |
+| Subject/      | Landscape/                                                                                                             | Manual, or AI-tagged                                        | Broad genre filtering                                      |
+| People/       | Family/, Friends/                                                                                                      | Semi-auto, digiKam facial recognition                       |                                                            |
+| Workflow/     | Needs_Dust_Cleanup, Needs_Re-edit                                                                                      | Manual                                                      | Actionable workflow notes                                  |
+| AI/           | Exposure/Well_Exposed, Exposure/Under_Exposed, ...                                                                     | Auto                                                        | Immediately filter new photos for defects.                 |
+
+##### 5.1.3.B Album-level schema
+
+```yaml
+album_id: "2026-07-asia-trip-01-china"
+parent_album: "../album.yaml" # null for standard flat albums
+title: "China Leg - Summer Asia Trip"
+category:
+  "Trip" # Maps to digiKam Album Category:
+  # [Trip | Day_Outing | Event | Film_Roll | Shoot | Misc]
+date_start: "2026-07-01"
+date_end: "2026-07-14"
+status: "editing" # [staging | culling | editing | archived]
+
+# Auto-stamped as Location/* hierarchical XMP tags on all photos in this album:
+locations:
+  - "Asia/China/Beijing"
+  - "Asia/China/Shanghai"
+
+# Auto-stamped as Event/* or Album/* hierarchical XMP tags if desired:
+album_tags:
+  - "Event/Vacation"
+
+gear:
+  digital:
+    - body: "Canon EOS R10"
+      lenses: ["RF-S 18-150mm F3.5-6.3 IS STM"]
+  film:
+    - roll_id: "R045"
+      camera_make: "Olympus"
+      camera_model: "Olympus OM-1"
+      lens: "Zuiko Auto-S 50mm f/1.8"
+      stock_brand: "Kodak"
+      stock_name: "Gold 200"
+      format: "35mm" # [35mm | 120 | Half-Frame]
+      film_type: "Color Negative" # [Color Negative | B&W | Slide]
+      iso_shot: 200 # Box or metered ISO
+      process: "Standard" # [Standard | Pushed +1 | Pushed +2 | Pulled -1]
+      lab: "AG Photo Lab"
+      date_shot: "2026-07-04" # Optional override for roll timestamping
+
+notes: "Heavy rain in Shanghai; shot R045 mostly around The Bund."
+```
+
+##### 5.1.3.C digiKam standard labels
+
+1. Pick labels
+   - rejected: unusable/defect, duplicate. Delete at end of cull
+   - pending: unsure/second-choice in burst
+   - accepted: keeper
+2. Star ratings
+   - 0 Unculled
+   - 1-2 documentary/memory keeper. Archive, no edit
+   - 3 solid photo - queue for editing
+   - 4 album highlight - shareable in gallery
+   - 5 portfolio tier
+3. Color Labels
+   - None: Original Digital RAW (.CR3)
+   - Blue: Original Film Scan (.jpg / .tiff)
+   - Yellow: Work-in-progress Edit
+   - Green: Final Export (.jpg ready for showcase)
+
+##### 5.1.3.D Private Custom Namespace (XMP-photoflow:\*)
+
+Finally, for machine-readable state that shouldn't clutter your visual tag tree in digiKam, scripts will write these attributes under the custom photoflow XMP namespace:
+
+- XMP-photoflow:AlbumID (e.g., "2026-07-asia-trip-01-china")
+- XMP-photoflow:RollID (e.g., "R045")
+- XMP-photoflow:FrameNumber (e.g., "14")
+- XMP-photoflow:StampedAt (ISO timestamp of when album.yaml was stamped)
+- XMP-photoflow:AIStatus ("unanalyzed" | "analyzed" | "skipped")
+- XMP-photoflow:AIModel (e.g., "gemini-3-flash")
+- XMP-photoflow:AIScanVerdict (e.g., "thin_negative_scanner_boost" | "clean_scan")
+
+AI human-readable critique paragraph goes into the standard `XMP-dc:Description` tag so it is readable from digiKam Captions panel.
 
 ### 5.2 Storage Architecture
 
@@ -138,7 +263,28 @@ Be careful to exclude videos from precache warming as this could cause unnecessa
 
 #### 5.2.3 Important `rclone` commands
 
-TODO
+```bash
+# 1. Mount Google Drive (typically run automatically via a systemd user service)
+rclone mount gdrive:Photo_Archive ~/Photo_Workspace/Archive \
+  --cache-dir ~/Photo_Workspace/.rclone_cache \
+  --vfs-cache-mode full \
+  --vfs-cache-max-size 150G \
+  --vfs-cache-max-age 9999h \
+  --vfs-write-back 5s \
+  --rc --rc-no-auth
+
+# 2. Pre-warm an album into local NVMe cache (excluding heavy Video subfolder)
+find ~/Photo_Workspace/Archive/2026/2026-05-14_LakeDistrict_Hike \
+  -path "*/Video/*" -prune -o -type f -print0 | xargs -0 -P 8 -n 1 cat > /dev/null
+
+# 3. Check if all background uploads have finished (look for uploadsQueued: 0)
+rclone rc vfs/stats
+
+# 4. Create a zero-byte Google Drive Shortcut for a Logical Album
+rclone backend shortcut gdrive:Photo_Archive \
+  "2026/2026-05-14_LakeDistrict_Hike/Exports/IMG_001.jpg" \
+  "Logical_Albums/Portfolio/IMG_001.jpg"
+```
 
 ### 5.3 Software choices
 
@@ -146,11 +292,34 @@ TODO
 - digiKam for photo management and culling.
 - ART (Another RawTherapee) for RAW and film scan editing. I choose to use ART over Darktable as I am using my laptop that has a powerful CPU but a weaker integrated GPU.
 
+Custom scripts:
+
+```txt
+~/photoflow/
+├── pyproject.toml              # Registers the `photoflow` CLI command
+├── .ExifTool_config            # Defines your custom `XMP-photoflow` XML namespace
+└── photoflow/
+    ├── cli.py                  # Main entry point (using `typer` or `click`)
+    ├── core/
+    │   ├── yaml_loader.py      # Walks up folders & merges parent/child album.yaml
+    │   ├── xmp_sidecar.py      # pyexiftool wrapper for EXIF + 3-layer XMP writing
+    │   └── digikam_db.py       # Safely updates digiKam's `Albums` SQLite table
+    └── commands/
+        ├── init_album.py       # 1. Album & Sub-Album Initializer (Stage 1)
+        ├── stamp.py            # 2. Metadata & Film Roll Stamper (Stage 1)
+        ├── cache.py            # 3. Rclone VFS Cache Controller (Stage 1)
+        ├── publish.py          # 4. Logical Album Shortcuts & GPhotos Sync (Stage 2)
+        ├── ai_analyze.py       # 5. Gemini Vision Film/Photo Analyzer (Stage 2)
+        └── maintain.py         # 6. Archive Linter & Cold HDD Backup (Stage 2)
+```
+
+Note, I'd also like the album metadata initialiser to support 'camera profiles', to save makes and models of regularly used cameras.
+
 ### 5.4 Sample Workflows
 
 #### 5.4.1 Import to Backup
 
-1. **Import:** Plug in SD card. Use an import script to create a dated album in the hot filing system with a `.yaml` metadata, and copy over the desired files, while tagging them with necessary metadata (e.g. an import tag). (_note_ it would be nice to have an automated script with a UI to do this too. I can easily conceive of how to do this for the album metadata creation, but less so for the photo selection. Maybe you have a UI to select the chosen photos, and then it copies them over manually, as I don't always want to copy all the files from the SD card over).
+1. **Import:** Plug in SD card. Use an import script to create a dated album in the hot filing system with a `.yaml` metadata, and copy over the desired files, while tagging them with necessary metadata (e.g. an import tag).
 2. **Cull:** Cull/rate photos quickly with digiKam, delete rejects.
 3. **Edit:** Use ART to edit the selected photos, and export to an `/Exports` subfolder.
 4. **Sync:** `rclone`'s FUSE system automatically syncs the photos to Google Drive.
