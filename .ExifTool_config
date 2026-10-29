@@ -1,0 +1,24 @@
+# .ExifTool_config
+%Image::ExifTool::UserDefined = (
+    'Image::ExifTool::XMP::Main' => {
+        photoflow => {
+            SubDirectory => {
+                TagTable => 'Image::ExifTool::UserDefined::photoflow',
+            },
+        },
+    },
+);
+
+%Image::ExifTool::UserDefined::photoflow = (
+    GROUPS => { 0 => 'XMP', 1 => 'XMP-photoflow', 2 => 'Image' },
+    NAMESPACE => { 'photoflow' => 'http://ns.photoflow.local/1.0/' },
+    WRITABLE => 'string',
+    AlbumID       => { },
+    RollID        => { },
+    FrameNumber   => { },
+    StampedAt     => { },
+    AIStatus      => { },
+    AIModel       => { },
+    AIScanVerdict => { },
+);
+1; # end
