@@ -47,20 +47,24 @@ def fetch_vfs_stats(rc_url: str) -> dict[str, Any]:
 
 def parse_stats_summary(data: dict[str, Any]) -> tuple[int, int, int, int]:
     """Extract (uploads_in_progress, uploads_queued, bytes_used, cached_files) from vfs/stats JSON."""
-    disk_cache = data.get("diskCache") if isinstance(data.get("diskCache"), dict) else data
+    raw_disk_cache = data.get("diskCache")
+    disk_cache: dict[str, Any] = (
+        raw_disk_cache if isinstance(raw_disk_cache, dict) else data
+    )
     uploads_in_progress = int(
-        disk_cache.get("uploadsInProgress", data.get("uploadsInProgress", 0))
+        disk_cache.get("uploadsInProgress", data.get("uploadsInProgress", 0)) or 0
     )
     uploads_queued = int(
-        disk_cache.get("uploadsQueued", data.get("uploadsQueued", 0))
+        disk_cache.get("uploadsQueued", data.get("uploadsQueued", 0)) or 0
     )
     bytes_used = int(
         disk_cache.get(
             "bytesUsed",
             data.get("bytesUsed", data.get("totalCacheSize", 0)),
         )
+        or 0
     )
-    files_count = int(disk_cache.get("files", data.get("files", 0)))
+    files_count = int(disk_cache.get("files", data.get("files", 0)) or 0)
     return uploads_in_progress, uploads_queued, bytes_used, files_count
 
 
@@ -108,7 +112,9 @@ def collect_warm_files(album_path: Path, *, with_video: bool = False) -> list[Pa
 def cache_status(
     rc_url: Annotated[
         str | None,
-        typer.Option("--rc-url", help="Override rclone rc URL (default http://127.0.0.1:5572)."),
+        typer.Option(
+            "--rc-url", help="Override rclone rc URL (default http://127.0.0.1:5572)."
+        ),
     ] = None,
     profiles_path: Annotated[
         Path | None,
@@ -122,7 +128,9 @@ def cache_status(
     try:
         stats = fetch_vfs_stats(effective_url)
     except httpx.HTTPError as exc:
-        console.print(f"[red]Failed to query rclone rc at {effective_url}/vfs/stats: {exc}[/red]")
+        console.print(
+            f"[red]Failed to query rclone rc at {effective_url}/vfs/stats: {exc}[/red]"
+        )
         raise typer.Exit(code=1) from exc
 
     in_progress, queued, bytes_used, files_count = parse_stats_summary(stats)
@@ -143,11 +151,15 @@ def cache_status(
 def cache_warm(
     album_path: Annotated[
         Path,
-        typer.Argument(help="Path to the album directory to pre-warm into local NVMe VFS cache."),
+        typer.Argument(
+            help="Path to the album directory to pre-warm into local NVMe VFS cache."
+        ),
     ],
     with_video: Annotated[
         bool,
-        typer.Option("--with-video", help="Include Video/ subfolder when warming cache."),
+        typer.Option(
+            "--with-video", help="Include Video/ subfolder when warming cache."
+        ),
     ] = False,
     rc_url: Annotated[
         str | None,
@@ -214,7 +226,9 @@ def cache_warm(
 def cache_evict(
     album_path: Annotated[
         Path,
-        typer.Argument(help="Path to the album directory to evict from the local VFS cache."),
+        typer.Argument(
+            help="Path to the album directory to evict from the local VFS cache."
+        ),
     ],
     rc_url: Annotated[
         str | None,
