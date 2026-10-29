@@ -38,24 +38,6 @@ def _sanitize_slug(name: str) -> str:
     return cleaned
 
 
-def _matching_mount_lenses(mount: str | None, lenses: dict[str, str]) -> list[str]:
-    if not mount:
-        return []
-    m_upper = mount.upper()
-    matched: list[str] = []
-    for key, val in lenses.items():
-        val_upper = val.upper()
-        key_upper = key.upper()
-        if (
-            m_upper in val_upper
-            or (m_upper == "RF" and ("RF" in val_upper or "CANON" in key_upper))
-            or (m_upper == "OM" and ("ZUIKO" in val_upper or "OM" in key_upper))
-            or (m_upper == "SR" and ("MD" in val_upper or "MC" in val_upper or "MINOLTA" in key_upper))
-        ):
-            matched.append(key)
-    return matched
-
-
 def parse_lens_overrides_input(
     raw_input: str, profiles: ProfilesConfig
 ) -> list[LensOverride]:
@@ -287,17 +269,13 @@ def init_command(
             cam_prof = profiles.cameras.digital.get(cam_key)
             body_name = cam_prof.model if cam_prof else cam_key
             make_name = cam_prof.make if cam_prof else None
-            default_mount_lenses = _matching_mount_lenses(
-                cam_prof.mount if cam_prof else None, profiles.lenses
-            )
-            default_lens_str = ", ".join(default_mount_lenses)
 
             if digital_lenses is not None:
                 raw_dlenses = digital_lenses
             else:
                 raw_dlenses = Prompt.ask(
                     f"Lenses for {body_name} (keys: {', '.join(profiles.lenses.keys())})",
-                    default=default_lens_str,
+                    default="",
                 )
             chosen_lenses = [
                 profiles.resolve_lens(lk.strip())
@@ -335,8 +313,7 @@ def init_command(
             cam_model = fcam.model if fcam else cam_key
             cam_format = fcam.format if fcam else "35mm"
 
-            mount_lenses = _matching_mount_lenses(fcam.mount if fcam else None, profiles.lenses)
-            default_flens = mount_lenses[0] if mount_lenses else next(iter(profiles.lenses.keys()), "")
+            default_flens = next(iter(profiles.lenses.keys()), "")
             raw_flenses = Prompt.ask(
                 f"Film lens key(s) ({avail_lenses})",
                 default=default_flens,
